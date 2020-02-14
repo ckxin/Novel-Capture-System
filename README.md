@@ -1,22 +1,10 @@
-# electron-learn
+# 基于JS爬虫的二九小说网小说抓取系统
+>基于Electron-Vue的小说爬取系统
 
-> An electron-vue project
-
-#### Build Setup
-
-``` bash
-# install dependencies
-npm install
-
-# serve with hot reload at localhost:9080
-npm run dev
-
-# build electron application for production
-npm run build
-
-
-```
-
----
-
-This project was generated with [electron-vue](https://github.com/SimulatedGREG/electron-vue) using [vue-cli](https://github.com/vuejs/vue-cli). Documentation about the original structure can be found [here](https://simulatedgreg.gitbooks.io/electron-vue/content/index.html).
+### 1.简介
+  这是一款基于Electron-Vue的桌面应用程序，该应用利用JS爬虫可以对二九小说网里的小说进行抓取并保存到本地。抓取速度取决于你当前的网速和该网站服务器当前状态。
+### 2.程序安装与卸载
+  **小说抓取系统安装程序.exe**为打包出来的安装程序，直接下载安装即可。卸载时找到程序安装文件夹，有一个**Uninstall Novel Capture.exe**，双击即可卸载程序。  
+  **小说抓取系统.zip**为打包出来的绿色免安装文件夹压缩文件，将其下载解压到一个文件夹，双击可执行程序即可。此方式不需要卸载，直接删除整个文件夹即可。
+### 3.具体使用方法
+  具体使用方法见链接https://www.jianshu.com/p/fd63833e22d1
