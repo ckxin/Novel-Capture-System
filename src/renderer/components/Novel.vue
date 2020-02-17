@@ -36,19 +36,13 @@
           <div class="msg-title">
             <div class="msg-text">抓取详细信息：</div>
             <div class="msg-button" v-if="isCap">
-              <button @click="capPause" class="pause-btn">
-                <img :src="isPause ? continueImg : pauseImg" width="25px" height="25px">
-              </button>
               <button @click="capStop" class="stop-btn">
                 <img src="../../../static/img/stop.png" width="25px" height="25px">
               </button>
             </div>
           </div>
           
-          <div class="msg-input" v-if="isWaitInput">等待开始</div>
-          <div class="msg-input" v-if="isCapInput">{{capMsg}}</div>
-          <div class="msg-input" v-if="isPauseInput">{{pauseMsg}}</div>
-          <div class="msg-input" v-if="isStopInput">正在停止...</div>
+          <div class="msg-input">{{capMsg}}</div>
         </div>
       </div>
     </div>
@@ -72,22 +66,28 @@
 
 <script>
   const ipc = require('electron').ipcRenderer;
+  const fs = require('fs');
   const path = require('path');
   const axios = require('axios');
   const cheerio = require('cheerio');
+  const async = require('async');
+  const iconv = require('iconv-lite');
   import {service} from '../../../static/js/service';
+
 
   async function capNovelList(url) {
     try{
-        let res = await service({url});
-        return new Promise(resolve => {
-            resolve(res.data);
-        })
+        let res = await service({url, timeout: 10000});
+        let buf = Buffer.from(res.data, 'binary');
+        const str = iconv.decode(buf, 'gbk');
+        return str;
     } catch(err) {
         console.log("capNovel error:");
         console.log(err);
+        return "";
     }
   }
+
 
   export default {
     name: 'Novel',
@@ -102,19 +102,9 @@
         capButtonFlag: false,
         capButtonT: "cap-buttonT",
         capButtonF: "cap-buttonF",
-        capMsg: "抓取目录...", 
-        pauseMsg: "正在暂停...", 
-        pauseImg: require("../../../static/img/pause.png"),
-        continueImg: require("../../../static/img/continue.png"),
-        remainChapters: [],
+        capMsg: "等待开始", 
         alertFlag: false,
-
         isCap: false,
-        isPause: false,
-        isWaitInput: true,
-        isCapInput: false,
-        isPauseInput: false,
-        isStopInput: false
       })
     },
     methods: {
@@ -127,6 +117,45 @@
         this.alertInfo = "";
       },
 
+      capChapter(url, callback) {
+        service({url})
+        .then(res => {
+          if(res === undefined) {
+            console.log("Data Undefined!");
+            this.capChapter(url, callback)
+          } else {
+            let buf= Buffer.from(res.data, 'binary');
+            const str = iconv.decode(buf, 'gbk');
+            let $$ = cheerio.load(str);
+            // 需要改为抓取页面标题截断方式
+            let title = $$('title').text().split('_')[0];
+            if(title.includes("第"))
+                title = `第${title.split("第")[1]}`;
+            let chapter = [];
+
+            // 需要改为抓取页面内容所在div的id以及注意该页面换行方式
+            let data = $$('div[id="content"] br');
+            data.each((idx, ele) => {
+              if(idx === 0) {
+                if(ele.prev.type === "text"){
+                    chapter.push(ele.prev.data);
+                }
+              }
+              else if(ele.next.type === "text"){
+                chapter.push(ele.next.data);
+              }    
+            })
+            this.capMsg = `${title} 抓取完毕！`;
+            callback(null, {title, chapter});
+          }
+        })
+        .catch(err => {
+          console.log("Chapter cap Error:");
+          console.log(err);
+          callback(null, {title: "error", chapter: url});
+        })
+      },
+
       async capNovel() {
         if(this.listURL === "" || this.novelName === "" || this.saveDir === "") {
           this.alertFlag = true;
@@ -135,17 +164,28 @@
           this.capButton = "抓取中..."
           this.capButtonFlag = true;
           this.capMsg = "抓取目录...";
-          this.isWaitInput = false;
-          this.isCapInput = true;
-          this.isPauseInput = false;
-          this.isStopInput = false;
+
+          console.time("get");
+
           let listURL = this.listURL;
           let novelName = this.novelName;
           let txtPath = path.join(this.saveDir, `${this.novelName}.txt`);
+          let errorPath = path.join(this.saveDir, `${this.novelName}_error.txt`)
 
           // 需要改为要抓取小说网页的基础路径
           let baseURL = `${listURL.split(".cc")[0]}.cc`;
           let html = await capNovelList(listURL);
+          if(html === "") {
+            this.capMsg = "目录页错误！";
+            this.listURL = "";
+            this.novelName = "";
+            this.saveDir = "";
+            this.dirButton = "选择存储目录";
+            this.capButton = "开始抓取";
+            this.capButtonFlag = false;
+            this.isCap = false;
+            return false;
+          }
           let $ = cheerio.load(html);
 
           // 需要修改为抓取页面目录class或id名称
@@ -159,45 +199,58 @@
             tmpURL = baseURL + tmpURL;
             chapterLinks.push(tmpURL);
           }
-          ipc.send("cap_novel", {txtPath, novelName, chapterLinks, status: "normal"});
+          this.capMsg = "目录抓取完毕！";
           this.isCap = true;
-        }
-      },
+          let _this = this;
+          async.mapLimit(chapterLinks, 100, function(chapterLink, callback){
+            _this.capChapter(chapterLink, callback);
+          }, function(err, res) {
+              if(err) {
+                console.log(err);
+                throw(err);
+              } else {
+                  let status = true;
+                  fs.writeFileSync(txtPath, `《${novelName}》\n`);
+                  fs.writeFileSync(errorPath, `《${novelName}》 抓取错误章节：\n`);
+                  res.forEach(item => {
+                    let title = item.title;
+                    let chapter = item.chapter;
+                    if(title === "error") {
+                      status = false;
+                      fs.appendFileSync(errorPath, `${chapter}\n\n`);
+                    }
+                    else {
+                      fs.appendFileSync(txtPath, `${title}\n`);
+                      chapter.forEach((val) => {
+                        fs.appendFileSync(txtPath, `${val}\n`);
+                      });
+                      fs.appendFileSync(txtPath, "\n");
+                      _this.capMsg = `${title} 写入完毕！`;
+                    }  
+                  });
+                  if(status) {
+                    _this.capMsg = `${novelName} 抓取完毕！`;
+                    fs.unlinkSync(errorPath);
+                  } else {
+                    _this.capMsg = `${novelName} 抓取过程出现错误，详情请见：${errorPath}`;
+                  }
+                  _this.novelName = "";
+                  _this.saveDir = "";
+                  _this.dirButton = "选择存储目录";
+                  _this.capButton = "开始抓取";
+                  _this.capButtonFlag = false;
+                  _this.isCap = false;
 
-      capPause() {
-        this.isPause = !this.isPause;
-        if(this.isPause) {
-          this.pauseMsg = "正在暂停...";
-          this.isWaitInput = false;
-          this.isCapInput = false;
-          this.isPauseInput = true;
-          this.isStopInput = false;
-          ipc.send("cap-pause");
-        } else {
-          this.isWaitInput = false;
-          this.isCapInput = true;
-          this.isPauseInput = false;
-          this.isStopInput = false;
-          let novelName = this.novelName;
-          let txtPath = path.join(this.saveDir, `${this.novelName}.txt`);
-          let remainChapters = this.remainChapters;
-          ipc.send("cap_novel", {txtPath, novelName, remainChapters, status: "continue"});
+                  console.timeEnd("get");
+              }
+              
+          })
         }
       },
 
       capStop() {
-        this.isWaitInput = false;
-        this.isCapInput = false;
-        this.isPauseInput = false;
-        this.isStopInput = true;
-        if(this.isPause) {
-          let novelName = this.novelName;
-          let txtPath = path.join(this.saveDir, `${this.novelName}.txt`);
-          ipc.send("cap-stop", {status: "paused", novelName, txtPath});
-        }
-        else
-          ipc.send("cap-stop", {status: "caping"});
-      }
+        location.reload();
+      }    
     },
     created() {
       ipc.on("choose-finished", (e, saveDir) => {
@@ -206,43 +259,6 @@
           this.dirButton = saveDir[0];
         }
       });
-
-      ipc.on("cap-started", (e, arg) => {
-        this.capMsg = arg;
-      });
-      ipc.on("cap-continued", (e, arg) => {
-        this.capMsg = arg;
-      });
-
-      ipc.on("chapter-finished", (e, arg) => {
-        this.capMsg = arg;
-      });
-
-      ipc.on("cap-finished", (e, arg) => {
-        this.capMsg = arg;
-        this.capButton = "开始抓取";
-        this.capButtonFlag = false;
-        this.isCap = false;
-      });
-
-      ipc.on("cap-paused", (e, arg) => {
-        this.remainChapters = arg.remainChapters;
-        this.pauseMsg = "暂停中...";
-      })
-
-      ipc.on("cap-stoped", (e) => {
-        this.listURL = "";
-        this.novelName = "";
-        this.saveDir = "";
-        this.dirButton = "选择存储目录";
-        this.capButton = "开始抓取";
-        this.capButtonFlag = false;
-        this.isCap = false;
-        this.isWaitInput = true;
-        this.isCapInput = false;
-        this.isPauseInput = false;
-        this.isStopInput = false;
-      })
     }
   }
 </script>
@@ -446,9 +462,6 @@
     border: none;
     outline: none;
     background: #343a40;
-  }
-  .pause-btn:hover {
-    background: grey;
   }
   .stop-btn:hover {
     background: red;
